@@ -304,7 +304,7 @@ main (void)
                          (void *)0);
   glEnableVertexAttribArray (0);
 
-  gluint circle_program, primitive_program;
+  gluint circle_program, primitive_program, texture_program;
 
   {
     gluint vertex_shader =
@@ -325,74 +325,145 @@ main (void)
 
     glDeleteShader (vertex_shader);
     glDeleteShader (fragment_shader);
+
+    vertex_shader =
+      create_shader (GL_VERTEX_SHADER, "shaders/texture.vert");
+    fragment_shader =
+      create_shader (GL_FRAGMENT_SHADER, "shaders/texture.frag");
+    texture_program =
+      create_program (vertex_shader, fragment_shader);
+
+    glDeleteShader (vertex_shader);
+    glDeleteShader (fragment_shader);
   }
+
+  gluint texture_array, texture_buffer;
+  glCreateVertexArrays (1, &texture_array);
+  glCreateBuffers (1, &texture_buffer);
+
+  glBindVertexArray (texture_array);
+  glBindBuffer (GL_ARRAY_BUFFER, texture_buffer);
+  glVertexAttribPointer (0, 4, GL_FLOAT, GL_FALSE, 0, (void *)0);
+  glEnableVertexAttribArray (0);
+
+  {
+    float quad[] = { -1, -1, 0, 0,
+                      1, -1, 1, 0,
+                     -1,  1, 0, 1,
+                      1,  1, 1, 1 };
+
+    glBindBuffer (GL_ARRAY_BUFFER, texture_buffer);
+    glBufferData (GL_ARRAY_BUFFER,
+                  sizeof (quad),
+                  quad,
+                  GL_STATIC_DRAW);
+  }
+
+  glUseProgram (texture_program);
+  glUniform1i (glGetUniformLocation (texture_program, "sampler"),
+               0);
+
+  gluint trace_texture;
+  glGenTextures (1, &trace_texture);
+  glBindTexture (GL_TEXTURE_2D, trace_texture);
+  glTexImage2D (GL_TEXTURE_2D,
+                0,
+                GL_RGBA,
+                SCREEN_WIDTH,
+                SCREEN_HEIGHT,
+                0,
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                NULL);
+  glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+  gluint trace_framebuffer;
+  glGenFramebuffers (1, &trace_framebuffer);
+  glBindFramebuffer (GL_FRAMEBUFFER, trace_framebuffer);
+  glFramebufferTexture2D (GL_FRAMEBUFFER,
+                          GL_COLOR_ATTACHMENT0,
+                          GL_TEXTURE_2D,
+                          trace_texture,
+                          0);
+
+  if (glCheckFramebufferStatus (GL_FRAMEBUFFER)
+      != GL_FRAMEBUFFER_COMPLETE)
+    {
+      fputs ("ERROR: framebuffer check failed.\n", stderr);
+      exit (EXIT_FAILURE);
+    }
 
   char execute_once = 1;
 
-  float trace_line[4] = { 0 };
+  float trace_line[4];
   float *prev = trace_line;
   float *curr = prev + 2;
 
-  for (size_t i = 0; i < coeffs.count; i++)
-    {
-      curr[0] += coeffs.data[2 * i + 0];
-      curr[1] += coeffs.data[2 * i + 1];
-    }
+  glEnable (GL_BLEND);
+  glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
+  glClearColor (0.0, 0.0, 0.0, 0.0);
+  glBindFramebuffer (GL_FRAMEBUFFER, trace_framebuffer);
+  glClear (GL_COLOR_BUFFER_BIT);
   glClearColor (1.0, 0.0, 0.0, 1.0);
+
+  float start_time = 0;
 
   while (!glfwWindowShouldClose (window))
     {
-      float t = glfwGetTime ();
+      float const t = glfwGetTime () - start_time;
 
+      if (!execute_once)
+        {
+          circles.data[0] = coeffs.data[0];
+          circles.data[1] = coeffs.data[1];
+
+          int freq = -FOURIER_DEGREE;
+
+          size_t i = 1;
+          while (i < coeffs.count)
+            {
+              freq += (freq == 0);
+
+              float c = cos (freq * t), s = sin (freq * t);
+              float x = coeffs.data[2 * i + 0];
+              float y = coeffs.data[2 * i + 1];
+
+              size_t const ind = 3 * i;
+              circles.data[ind - 1] = sqrt (x * x + y * y);
+              circles.data[ind + 0] = x * c - y * s
+                + circles.data[ind - 3];
+              circles.data[ind + 1] = x * s + y * c
+                + circles.data[ind - 2];
+
+              ++freq;
+              ++i;
+            }
+
+          prev[0] = curr[0];
+          prev[1] = curr[1];
+
+          --i;
+
+          curr[0] = circles.data[3 * i + 0];
+          curr[1] = circles.data[3 * i + 1];
+
+          glBindBuffer (GL_ARRAY_BUFFER, circle_buffer);
+          glBufferSubData (GL_ARRAY_BUFFER,
+                           0,
+                           get_size_of_arrayf (&circles),
+                           circles.data);
+
+          glBindBuffer (GL_ARRAY_BUFFER, trace_buffer);
+          glBufferSubData (GL_ARRAY_BUFFER,
+                           0,
+                           sizeof (trace_line),
+                           trace_line);
+        }
+
+      glBindFramebuffer (GL_FRAMEBUFFER, 0);
       glClear (GL_COLOR_BUFFER_BIT);
-
-      {
-        circles.data[0] = coeffs.data[0];
-        circles.data[1] = coeffs.data[1];
-
-        int freq = -FOURIER_DEGREE;
-
-        size_t i = 1;
-        while (i < coeffs.count)
-          {
-            freq += (freq == 0);
-
-            float c = cos (freq * t), s = sin (freq * t);
-            float x = coeffs.data[2 * i + 0];
-            float y = coeffs.data[2 * i + 1];
-
-            size_t const ind = 3 * i;
-            circles.data[ind - 1] = sqrt (x * x + y * y);
-            circles.data[ind + 0] = x * c - y * s
-                                    + circles.data[ind - 3];
-            circles.data[ind + 1] = x * s + y * c
-                                    + circles.data[ind - 2];
-
-            ++freq;
-            ++i;
-          }
-
-        prev[0] = curr[0];
-        prev[1] = curr[1];
-
-        --i;
-
-        curr[0] = circles.data[3 * i + 0];
-        curr[1] = circles.data[3 * i + 1];
-
-        glBindBuffer (GL_ARRAY_BUFFER, circle_buffer);
-        glBufferSubData (GL_ARRAY_BUFFER,
-                         0,
-                         get_size_of_arrayf (&circles),
-                         circles.data);
-
-        glBindBuffer (GL_ARRAY_BUFFER, trace_buffer);
-        glBufferSubData (GL_ARRAY_BUFFER,
-                         0,
-                         sizeof (trace_line),
-                         trace_line);
-      }
 
       glUseProgram (circle_program);
       glBindVertexArray (points_array);
@@ -401,18 +472,27 @@ main (void)
                              CIRCLE_SAMPLES + 1,
                              points.count);
 
-      glBindVertexArray (circle_array);
-      glDrawArraysInstanced (GL_LINE_LOOP,
-                             1,
-                             CIRCLE_SAMPLES,
-                             circles.count - 1);
+      if (!execute_once)
+        {
+          glBindVertexArray (circle_array);
+          glDrawArraysInstanced (GL_LINE_LOOP,
+                                 1,
+                                 CIRCLE_SAMPLES,
+                                 circles.count - 1);
 
-      glUseProgram (primitive_program);
-      glBindVertexArray (trace_array);
-      glDrawArrays (GL_LINES, 0, 2);
+          glUseProgram (texture_program);
+          glBindVertexArray (texture_array);
+          glDrawArrays (GL_TRIANGLE_STRIP, 0, 4);
 
-      glBindVertexArray (connecting_lines_array);
-      glDrawArrays (GL_LINE_STRIP, 0, circles.count);
+          glUseProgram (primitive_program);
+          glBindVertexArray (connecting_lines_array);
+          glDrawArrays (GL_LINE_STRIP, 0, circles.count);
+
+          glBindFramebuffer (GL_FRAMEBUFFER, trace_framebuffer);
+
+          glBindVertexArray (trace_array);
+          glDrawArrays (GL_LINES, 0, 2);
+        }
 
       if (points.count == 9 && execute_once)
         {
@@ -443,6 +523,17 @@ main (void)
             coeffs.data[0] = x;
             coeffs.data[1] = y;
           }
+
+          curr[0] = 0;
+          curr[1] = 0;
+
+          for (size_t i = 0; i < coeffs.count; i++)
+            {
+              curr[0] += coeffs.data[2 * i + 0];
+              curr[1] += coeffs.data[2 * i + 1];
+            }
+
+          start_time = glfwGetTime ();
 
           execute_once = 0;
         }
