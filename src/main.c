@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <string.h>
+#include <assert.h>
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -9,6 +11,8 @@
 
 #define CIRCLE_SAMPLES 64
 #define MAX_POINTS_COUNT 128
+
+#define FOURIER_DEGREE 16
 
 #define SCREEN_WIDTH 800
 #define SCREEN_HEIGHT 600
@@ -55,6 +59,64 @@ mouse_button_callback (GLFWwindow *win,
                        cont.points + index);
 
       ++*cont.point_count;
+    }
+}
+
+typedef struct Vec2f Vec2f;
+
+struct Vec2f
+{
+  float x, y;
+};
+
+void
+acc_scale_v2f (Vec2f *dst, Vec2f s, Vec2f x, Vec2f y)
+{
+  dst->x += s.x * x.x + s.y * y.x;
+  dst->y += s.x * x.y + s.y * y.y;
+}
+
+Vec2f
+integrant (float *z, float angle)
+{
+  float x = z[0], y = z[1];
+  float c = cos (angle), s = sin (angle);
+
+  // Compute "z * e^(-i * angle)".
+  return (Vec2f){ x * c + y * s, y * c - x * s };
+}
+
+void
+compute_fourier_series (float *dst, float *z, size_t count,
+                        uint32_t degree)
+{
+  assert (count % 2 == 1);
+
+  --count;
+
+  float const dt = 2.0 * M_PI / count;
+  float const factor = (1.0 / 3.0) / count;
+
+  for (int32_t i = -(int32_t)degree; i <= (int32_t)degree; i++)
+    {
+      Vec2f coeff = { 0, 0 };
+
+      acc_scale_v2f (&coeff,
+                     (Vec2f){ factor, -factor },
+                     integrant (z + 0, 0),
+                     integrant (z + 3 * count, i * dt * count));
+
+      for (size_t j = 1; j < count; j += 2)
+        {
+          acc_scale_v2f (&coeff,
+                         (Vec2f){ 4 * factor, 2 * factor },
+                         integrant (z + 3 * j, i * dt * j),
+                         integrant (z + 3 * (j + 1), i * dt * (j + 1)));
+        }
+
+      size_t ind = 2 * (i + degree);
+      dst[ind + 0] = coeff.x;
+      dst[ind + 1] = coeff.y;
     }
 }
 
@@ -133,7 +195,9 @@ main (void)
 
   size_t const size_of_points_in_bytes =
     MAX_POINTS_COUNT * 3 * sizeof (float);
-  float *points = malloc_or_exit (size_of_points_in_bytes);
+  // Allocate extra point for compute_fourier_series.
+  float *points = malloc_or_exit (size_of_points_in_bytes
+                                  + 3 * sizeof (float));
   size_t points_count = 0;
 
   glBufferData (GL_ARRAY_BUFFER,
@@ -160,6 +224,14 @@ main (void)
 
   glfwSetWindowUserPointer (window, &mouse_context);
 
+  size_t const coeff_coconut = 2 * FOURIER_DEGREE + 1;
+  float *coeffs =
+    malloc_or_exit (2 * coeff_coconut * sizeof (float));
+  float *circles =
+    malloc_or_exit (3 * (2 * FOURIER_DEGREE) * sizeof (float));
+
+  char execute_once = 1;
+
   glClearColor (1.0, 0.0, 0.0, 1.0);
 
   while (!glfwWindowShouldClose (window))
@@ -171,6 +243,39 @@ main (void)
                              0,
                              CIRCLE_SAMPLES + 1,
                              points_count);
+
+      if (points_count == 9 && execute_once)
+        {
+          char should_incr = 0;
+
+          if (points_count % 2 == 0)
+            {
+              points[points_count + 0] =
+                (points[0] + points[points_count - 2]) / 2;
+              points[points_count + 1] =
+                (points[1] + points[points_count - 1]) / 2;
+              should_incr = 1;
+            }
+
+          compute_fourier_series (coeffs,
+                                  points,
+                                  points_count + should_incr,
+                                  FOURIER_DEGREE);
+
+          {
+            size_t ind = 2 * FOURIER_DEGREE;
+            float x = coeffs[ind + 0], y = coeffs[ind + 1];
+
+            memmove (coeffs + 2,
+                     coeffs,
+                     FOURIER_DEGREE * 2 * sizeof (float));
+
+            coeffs[0] = x;
+            coeffs[1] = y;
+          }
+
+          execute_once = 0;
+        }
 
       glfwSwapBuffers (window);
 
