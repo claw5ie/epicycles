@@ -12,7 +12,7 @@
 #define CIRCLE_SAMPLES 64
 #define MAX_POINTS_COUNT 128
 
-#define FOURIER_DEGREE 16
+#define FOURIER_DEGREE 2
 
 #define SCREEN_WIDTH 800
 #define SCREEN_HEIGHT 600
@@ -256,6 +256,8 @@ main (void)
 
   // Remove last point for fourier series.
   --points.capacity;
+  coeffs.count = coeffs.capacity;
+  circles.count = circles.capacity;
 
   MouseButtonContext mouse_context = { points_buffer,
                                        &points };
@@ -274,20 +276,68 @@ main (void)
                 NULL,
                 GL_DYNAMIC_DRAW);
 
-  gluint program;
+  gluint trace_array, trace_buffer;
+  glCreateVertexArrays (1, &trace_array);
+  glCreateBuffers (1, &trace_buffer);
+
+  glBindBuffer (GL_ARRAY_BUFFER, trace_buffer);
+  glBufferData (GL_ARRAY_BUFFER,
+                2 * 2 * sizeof (float),
+                NULL,
+                GL_DYNAMIC_DRAW);
+
+  glBindVertexArray (trace_array);
+  glBindBuffer (GL_ARRAY_BUFFER, trace_buffer);
+  glVertexAttribPointer (0, 2, GL_FLOAT, GL_FALSE, 0, (void *)0);
+  glEnableVertexAttribArray (0);
+
+  gluint connecting_lines_array;
+  glCreateVertexArrays (1, &connecting_lines_array);
+
+  glBindVertexArray (connecting_lines_array);
+  glBindBuffer (GL_ARRAY_BUFFER, circle_buffer);
+  glVertexAttribPointer (0,
+                         2,
+                         GL_FLOAT,
+                         GL_FALSE,
+                         3 * sizeof (float),
+                         (void *)0);
+  glEnableVertexAttribArray (0);
+
+  gluint circle_program, primitive_program;
 
   {
     gluint vertex_shader =
       create_shader (GL_VERTEX_SHADER, "shaders/circle.vert");
     gluint fragment_shader =
       create_shader (GL_FRAGMENT_SHADER, "shaders/circle.frag");
-    program = create_program (vertex_shader, fragment_shader);
+    circle_program = create_program (vertex_shader, fragment_shader);
+
+    glDeleteShader (vertex_shader);
+    glDeleteShader (fragment_shader);
+
+    vertex_shader =
+      create_shader (GL_VERTEX_SHADER, "shaders/primitive.vert");
+    fragment_shader =
+      create_shader (GL_FRAGMENT_SHADER, "shaders/primitive.frag");
+    primitive_program =
+      create_program (vertex_shader, fragment_shader);
 
     glDeleteShader (vertex_shader);
     glDeleteShader (fragment_shader);
   }
 
   char execute_once = 1;
+
+  float trace_line[4] = { 0 };
+  float *prev = trace_line;
+  float *curr = prev + 2;
+
+  for (size_t i = 0; i < coeffs.count; i++)
+    {
+      curr[0] += coeffs.data[2 * i + 0];
+      curr[1] += coeffs.data[2 * i + 1];
+    }
 
   glClearColor (1.0, 0.0, 0.0, 1.0);
 
@@ -301,7 +351,7 @@ main (void)
         circles.data[0] = coeffs.data[0];
         circles.data[1] = coeffs.data[1];
 
-        float freq = -FOURIER_DEGREE;
+        int freq = -FOURIER_DEGREE;
 
         size_t i = 1;
         while (i < coeffs.count)
@@ -323,17 +373,28 @@ main (void)
             ++i;
           }
 
-        // Remove the last point, since it doesn't have a radius.
-        circles.count = i - 1;
+        prev[0] = curr[0];
+        prev[1] = curr[1];
+
+        --i;
+
+        curr[0] = circles.data[3 * i + 0];
+        curr[1] = circles.data[3 * i + 1];
 
         glBindBuffer (GL_ARRAY_BUFFER, circle_buffer);
         glBufferSubData (GL_ARRAY_BUFFER,
                          0,
                          get_size_of_arrayf (&circles),
                          circles.data);
+
+        glBindBuffer (GL_ARRAY_BUFFER, trace_buffer);
+        glBufferSubData (GL_ARRAY_BUFFER,
+                         0,
+                         sizeof (trace_line),
+                         trace_line);
       }
 
-      glUseProgram (program);
+      glUseProgram (circle_program);
       glBindVertexArray (points_array);
       glDrawArraysInstanced (GL_TRIANGLE_FAN,
                              0,
@@ -344,7 +405,14 @@ main (void)
       glDrawArraysInstanced (GL_LINE_LOOP,
                              1,
                              CIRCLE_SAMPLES,
-                             circles.count);
+                             circles.count - 1);
+
+      glUseProgram (primitive_program);
+      glBindVertexArray (trace_array);
+      glDrawArrays (GL_LINES, 0, 2);
+
+      glBindVertexArray (connecting_lines_array);
+      glDrawArrays (GL_LINE_STRIP, 0, circles.count);
 
       if (points.count == 9 && execute_once)
         {
@@ -363,7 +431,6 @@ main (void)
                                   points.data,
                                   points.count + should_incr,
                                   FOURIER_DEGREE);
-          coeffs.count = coeffs.capacity;
 
           {
             size_t ind = 2 * FOURIER_DEGREE;
