@@ -18,12 +18,47 @@
 #define SCREEN_HEIGHT 600
 
 typedef struct MouseButtonContext MouseButtonContext;
+typedef struct Arrayf Arrayf;
+
+struct Arrayf
+{
+  float *data;
+  size_t comps;
+  size_t count;
+  size_t capacity;
+};
+
+Arrayf
+create_arrayf (size_t comps, size_t capacity)
+{
+  assert (comps > 0 && capacity > 0);
+
+  Arrayf arr;
+
+  arr.data = malloc_or_exit (comps * capacity * sizeof (float));
+  arr.comps = comps;
+  arr.count = 0;
+  arr.capacity = capacity;
+
+  return arr;
+}
+
+size_t
+get_total_size_of_arrayf (const Arrayf *arr)
+{
+  return arr->comps * arr->capacity * sizeof (float);
+}
+
+size_t
+get_size_of_arrayf (const Arrayf *arr)
+{
+  return arr->comps * arr->count * sizeof (float);
+}
 
 struct MouseButtonContext
 {
   gluint buffer;
-  float *points;
-  size_t *point_count;
+  Arrayf *points;
 };
 
 void
@@ -37,7 +72,7 @@ mouse_button_callback (GLFWwindow *win,
 
   if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS)
     {
-      if (*cont.point_count >= MAX_POINTS_COUNT)
+      if (cont.points->count >= MAX_POINTS_COUNT)
         return;
 
       double xpos, ypos;
@@ -46,19 +81,19 @@ mouse_button_callback (GLFWwindow *win,
       xpos = xpos / SCREEN_WIDTH * 2 - 1;
       ypos = -ypos / SCREEN_HEIGHT * 2 + 1;
 
-      size_t index = 3 * *cont.point_count;
+      size_t index = 3 * cont.points->count;
 
-      cont.points[index + 0] = xpos;
-      cont.points[index + 1] = ypos;
-      cont.points[index + 2] = 0.01;
+      cont.points->data[index + 0] = xpos;
+      cont.points->data[index + 1] = ypos;
+      cont.points->data[index + 2] = 0.01;
 
       glBindBuffer (GL_ARRAY_BUFFER, cont.buffer);
       glBufferSubData (GL_ARRAY_BUFFER,
                        index * sizeof (float),
                        3 * sizeof (float),
-                       cont.points + index);
+                       cont.points->data + index);
 
-      ++*cont.point_count;
+      ++cont.points->count;
     }
 }
 
@@ -120,6 +155,63 @@ compute_fourier_series (float *dst, float *z, size_t count,
     }
 }
 
+gluint
+setup_circle_samples ()
+{
+  size_t const size_in_bytes = (CIRCLE_SAMPLES + 1)
+                               * 2 * sizeof (float);
+  float *circle = malloc_or_exit (size_in_bytes);
+  float *next = circle;
+
+  next[0] = 0;
+  next[1] = 0;
+
+  for (size_t i = 0; i < CIRCLE_SAMPLES; i++)
+    {
+      next += 2;
+
+      float angle = 2 * M_PI / (CIRCLE_SAMPLES - 1) * i;
+      next[0] = cos (angle);
+      next[1] = sin (angle);
+    }
+
+  gluint buffer;
+  glCreateBuffers (1, &buffer);
+  glBindBuffer (GL_ARRAY_BUFFER, buffer);
+  glBufferData (GL_ARRAY_BUFFER,
+                size_in_bytes,
+                circle,
+                GL_STATIC_DRAW);
+
+  free (circle);
+
+  return buffer;
+}
+
+void
+create_and_attach_buffer (gluint vertex_buffer,
+                          gluint *array_loc,
+                          gluint *buffer_loc)
+{
+  gluint array, buffer;
+  glCreateVertexArrays (1, &array);
+  glCreateBuffers (1, &buffer);
+
+  glBindVertexArray (array);
+
+  glBindBuffer (GL_ARRAY_BUFFER, vertex_buffer);
+  glVertexAttribPointer (0, 2, GL_FLOAT, GL_FALSE, 0, (void *)0);
+  glEnableVertexAttribArray (0);
+
+  glBindBuffer (GL_ARRAY_BUFFER, buffer);
+  glVertexAttribPointer (1, 3, GL_FLOAT, GL_FALSE, 0, (void *)0);
+  glEnableVertexAttribArray (1);
+  glVertexAttribDivisor (1, 1);
+
+  *array_loc = array;
+  *buffer_loc = buffer;
+}
+
 int
 main (void)
 {
@@ -146,62 +238,39 @@ main (void)
 
   glfwSetMouseButtonCallback (window, mouse_button_callback);
 
-  gluint circle_buffer;
+  gluint circle_samples_buffer = setup_circle_samples ();
 
-  {
-    glCreateBuffers (1, &circle_buffer);
-    glBindBuffer (GL_ARRAY_BUFFER, circle_buffer);
+  gluint points_array, points_buffer;
+  create_and_attach_buffer (circle_samples_buffer,
+                            &points_array,
+                            &points_buffer);
 
-    size_t const size_in_bytes = (CIRCLE_SAMPLES + 1)
-      * 2 * sizeof (float);
-    float *circle = malloc_or_exit (size_in_bytes);
-    float *next = circle;
+  gluint circle_array, circle_buffer;
+  create_and_attach_buffer (circle_samples_buffer,
+                            &circle_array,
+                            &circle_buffer);
 
-    next[0] = 0;
-    next[1] = 0;
+  Arrayf points = create_arrayf (3, MAX_POINTS_COUNT + 1);
+  Arrayf coeffs = create_arrayf (2, 2 * FOURIER_DEGREE + 1);
+  Arrayf circles = create_arrayf (3, 2 * FOURIER_DEGREE + 1);
 
-    for (size_t i = 0; i < CIRCLE_SAMPLES; i++)
-      {
-        next += 2;
+  // Remove last point for fourier series.
+  --points.capacity;
 
-        float angle = 2 * M_PI / (CIRCLE_SAMPLES - 1) * i;
-        next[0] = cos (angle);
-        next[1] = sin (angle);
-      }
+  MouseButtonContext mouse_context = { points_buffer,
+                                       &points };
 
-    glBufferData (GL_ARRAY_BUFFER,
-                  size_in_bytes,
-                  circle,
-                  GL_STATIC_DRAW);
+  glfwSetWindowUserPointer (window, &mouse_context);
 
-    free (circle);
-  }
-
-  gluint array;
-  glCreateVertexArrays (1, &array);
-  glBindVertexArray (array);
+  glBindBuffer (GL_ARRAY_BUFFER, points_buffer);
+  glBufferData (GL_ARRAY_BUFFER,
+                get_total_size_of_arrayf (&points),
+                NULL,
+                GL_DYNAMIC_DRAW);
 
   glBindBuffer (GL_ARRAY_BUFFER, circle_buffer);
-  glVertexAttribPointer (0, 2, GL_FLOAT, GL_FALSE, 0, (void *)0);
-  glEnableVertexAttribArray (0);
-
-  gluint points_buffer;
-  glCreateBuffers (1, &points_buffer);
-  glBindBuffer (GL_ARRAY_BUFFER, points_buffer);
-
-  glVertexAttribPointer (1, 3, GL_FLOAT, GL_FALSE, 0, (void *)0);
-  glEnableVertexAttribArray (1);
-  glVertexAttribDivisor (1, 1);
-
-  size_t const size_of_points_in_bytes =
-    MAX_POINTS_COUNT * 3 * sizeof (float);
-  // Allocate extra point for compute_fourier_series.
-  float *points = malloc_or_exit (size_of_points_in_bytes
-                                  + 3 * sizeof (float));
-  size_t points_count = 0;
-
   glBufferData (GL_ARRAY_BUFFER,
-                size_of_points_in_bytes,
+                get_total_size_of_arrayf (&circles),
                 NULL,
                 GL_DYNAMIC_DRAW);
 
@@ -218,60 +287,94 @@ main (void)
     glDeleteShader (fragment_shader);
   }
 
-  MouseButtonContext mouse_context = { points_buffer,
-                                       points,
-                                       &points_count };
-
-  glfwSetWindowUserPointer (window, &mouse_context);
-
-  size_t const coeff_coconut = 2 * FOURIER_DEGREE + 1;
-  float *coeffs =
-    malloc_or_exit (2 * coeff_coconut * sizeof (float));
-  float *circles =
-    malloc_or_exit (3 * (2 * FOURIER_DEGREE) * sizeof (float));
-
   char execute_once = 1;
 
   glClearColor (1.0, 0.0, 0.0, 1.0);
 
   while (!glfwWindowShouldClose (window))
     {
+      float t = glfwGetTime ();
+
       glClear (GL_COLOR_BUFFER_BIT);
 
+      {
+        circles.data[0] = coeffs.data[0];
+        circles.data[1] = coeffs.data[1];
+
+        float freq = -FOURIER_DEGREE;
+
+        size_t i = 1;
+        while (i < coeffs.count)
+          {
+            freq += (freq == 0);
+
+            float c = cos (freq * t), s = sin (freq * t);
+            float x = coeffs.data[2 * i + 0];
+            float y = coeffs.data[2 * i + 1];
+
+            size_t const ind = 3 * i;
+            circles.data[ind - 1] = sqrt (x * x + y * y);
+            circles.data[ind + 0] = x * c - y * s
+                                    + circles.data[ind - 3];
+            circles.data[ind + 1] = x * s + y * c
+                                    + circles.data[ind - 2];
+
+            ++freq;
+            ++i;
+          }
+
+        // Remove the last point, since it doesn't have a radius.
+        circles.count = i - 1;
+
+        glBindBuffer (GL_ARRAY_BUFFER, circle_buffer);
+        glBufferSubData (GL_ARRAY_BUFFER,
+                         0,
+                         get_size_of_arrayf (&circles),
+                         circles.data);
+      }
+
       glUseProgram (program);
+      glBindVertexArray (points_array);
       glDrawArraysInstanced (GL_TRIANGLE_FAN,
                              0,
                              CIRCLE_SAMPLES + 1,
-                             points_count);
+                             points.count);
 
-      if (points_count == 9 && execute_once)
+      glBindVertexArray (circle_array);
+      glDrawArraysInstanced (GL_LINE_LOOP,
+                             1,
+                             CIRCLE_SAMPLES,
+                             circles.count);
+
+      if (points.count == 9 && execute_once)
         {
           char should_incr = 0;
 
-          if (points_count % 2 == 0)
+          if (points.count % 2 == 0)
             {
-              points[points_count + 0] =
-                (points[0] + points[points_count - 2]) / 2;
-              points[points_count + 1] =
-                (points[1] + points[points_count - 1]) / 2;
+              points.data[points.count + 0] =
+                (points.data[0] + points.data[points.count - 2]) / 2;
+              points.data[points.count + 1] =
+                (points.data[1] + points.data[points.count - 1]) / 2;
               should_incr = 1;
             }
 
-          compute_fourier_series (coeffs,
-                                  points,
-                                  points_count + should_incr,
+          compute_fourier_series (coeffs.data,
+                                  points.data,
+                                  points.count + should_incr,
                                   FOURIER_DEGREE);
+          coeffs.count = coeffs.capacity;
 
           {
             size_t ind = 2 * FOURIER_DEGREE;
-            float x = coeffs[ind + 0], y = coeffs[ind + 1];
+            float x = coeffs.data[ind + 0], y = coeffs.data[ind + 1];
 
-            memmove (coeffs + 2,
-                     coeffs,
+            memmove (coeffs.data + 2,
+                     coeffs.data,
                      FOURIER_DEGREE * 2 * sizeof (float));
 
-            coeffs[0] = x;
-            coeffs[1] = y;
+            coeffs.data[0] = x;
+            coeffs.data[1] = y;
           }
 
           execute_once = 0;
@@ -282,7 +385,9 @@ main (void)
       glfwPollEvents ();
     }
 
-  free (points);
+  free (circles.data);
+  free (coeffs.data);
+  free (points.data);
 
   glfwTerminate ();
 
