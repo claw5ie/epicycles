@@ -387,6 +387,19 @@ main (void)
                           trace_texture,
                           0);
 
+  gluint connecting_points_array;
+  glCreateVertexArrays (1, &connecting_points_array);
+
+  glBindVertexArray (connecting_points_array);
+  glBindBuffer (GL_ARRAY_BUFFER, points_buffer);
+  glVertexAttribPointer (0,
+                         2,
+                         GL_FLOAT,
+                         GL_FALSE,
+                         3 * sizeof (float),
+                         (void *)0);
+  glEnableVertexAttribArray (0);
+
   if (glCheckFramebufferStatus (GL_FRAMEBUFFER)
       != GL_FRAMEBUFFER_COMPLETE)
     {
@@ -396,9 +409,7 @@ main (void)
 
   char execute_once = 1;
 
-  float trace_line[4];
-  float *prev = trace_line;
-  float *curr = prev + 2;
+  float trace_line[4], *prev = trace_line, *curr = prev + 2;
 
   glEnable (GL_BLEND);
   glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -433,9 +444,9 @@ main (void)
               size_t const ind = 3 * i;
               circles.data[ind - 1] = sqrt (x * x + y * y);
               circles.data[ind + 0] = x * c - y * s
-                + circles.data[ind - 3];
+                                      + circles.data[ind - 3];
               circles.data[ind + 1] = x * s + y * c
-                + circles.data[ind - 2];
+                                      + circles.data[ind - 2];
 
               ++freq;
               ++i;
@@ -472,8 +483,13 @@ main (void)
                              CIRCLE_SAMPLES + 1,
                              points.count);
 
+      glUseProgram (primitive_program);
+      glBindVertexArray (connecting_points_array);
+      glDrawArrays (GL_LINE_LOOP, 0, points.count);
+
       if (!execute_once)
         {
+          glUseProgram (circle_program);
           glBindVertexArray (circle_array);
           glDrawArraysInstanced (GL_LINE_LOOP,
                                  1,
