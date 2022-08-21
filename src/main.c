@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
+#include <stdbool.h>
 #include <assert.h>
 
 #include <GL/glew.h>
@@ -71,39 +72,59 @@ const float ortho[4 * 4] =
     0, 0, 1, 0,
     0, 0, 0, 1 };
 
+bool is_left_mouse_button_pressed = false;
+
 void
 mouse_button_callback (GLFWwindow *win,
                        int button, int action, int mods)
 {
+  (void)win;
   (void)mods;
 
-  MouseButtonContext cont =
+  if (button == GLFW_MOUSE_BUTTON_LEFT)
+    is_left_mouse_button_pressed = (action == GLFW_PRESS);
+}
+
+void
+mouse_cursor_pos_callback (GLFWwindow *win,
+                           double xpos, double ypos)
+{
+  MouseButtonContext ctx =
     *(MouseButtonContext *)glfwGetWindowUserPointer (win);
 
-  if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS)
+  if (is_left_mouse_button_pressed)
     {
-      if (cont.points->count >= MAX_POINTS_COUNT)
-        return;
+      size_t const count = ctx.points->count;
 
-      double xpos, ypos;
-      glfwGetCursorPos (win, &xpos, &ypos);
+      if (count >= MAX_POINTS_COUNT)
+        return;
 
       xpos = xpos / SCREEN_WIDTH * (right - left) + left;
       ypos = -ypos / SCREEN_HEIGHT * (top - bottom) + top;
 
-      size_t index = 3 * cont.points->count;
+      if (count > 0)
+        {
+          float *prev_point = ctx.points->data + 3 * (count - 1);
 
-      cont.points->data[index + 0] = xpos;
-      cont.points->data[index + 1] = ypos;
-      cont.points->data[index + 2] = (right - left) / 200;
+          if (pow (xpos - prev_point[0], 2)
+              + pow (ypos - prev_point[1], 2)
+              < (right - left) / 64)
+            return;
+        }
 
-      glBindBuffer (GL_ARRAY_BUFFER, cont.buffer);
+      float *point = ctx.points->data + 3 * count;
+
+      point[0] = xpos;
+      point[1] = ypos;
+      point[2] = (right - left) / 200;
+
+      glBindBuffer (GL_ARRAY_BUFFER, ctx.buffer);
       glBufferSubData (GL_ARRAY_BUFFER,
-                       index * sizeof (float),
+                       (point - ctx.points->data) * sizeof (float),
                        3 * sizeof (float),
-                       cont.points->data + index);
+                       point);
 
-      ++cont.points->count;
+      ++ctx.points->count;
     }
 }
 
@@ -247,6 +268,7 @@ main (void)
     exit (EXIT_FAILURE);
 
   glfwSetMouseButtonCallback (window, mouse_button_callback);
+  glfwSetCursorPosCallback (window, mouse_cursor_pos_callback);
 
   gluint circle_samples_buffer = setup_circle_samples ();
 
@@ -433,7 +455,7 @@ main (void)
       exit (EXIT_FAILURE);
     }
 
-  char execute_once = 1;
+  bool execute_once = true;
 
   float trace_line[4], *prev = trace_line, *curr = prev + 2;
 
@@ -577,7 +599,7 @@ main (void)
 
           start_time = glfwGetTime ();
 
-          execute_once = 0;
+          execute_once = false;
         }
 
       glfwSwapBuffers (window);
