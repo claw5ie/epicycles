@@ -61,6 +61,16 @@ struct MouseButtonContext
   Arrayf *points;
 };
 
+float const aspect_ratio = (float)SCREEN_WIDTH / SCREEN_HEIGHT;
+float const left = -4, right = 4;
+float const bottom = left / aspect_ratio, top = right / aspect_ratio;
+
+const float ortho[4 * 4] =
+  { 2.0 / (right - left), 0, 0, -(left + right) / (right - left),
+    0, 2.0 / (top - bottom), 0, -(bottom + top) / (top - bottom),
+    0, 0, 1, 0,
+    0, 0, 0, 1 };
+
 void
 mouse_button_callback (GLFWwindow *win,
                        int button, int action, int mods)
@@ -78,14 +88,14 @@ mouse_button_callback (GLFWwindow *win,
       double xpos, ypos;
       glfwGetCursorPos (win, &xpos, &ypos);
 
-      xpos = xpos / SCREEN_WIDTH * 2 - 1;
-      ypos = -ypos / SCREEN_HEIGHT * 2 + 1;
+      xpos = xpos / SCREEN_WIDTH * (right - left) + left;
+      ypos = -ypos / SCREEN_HEIGHT * (top - bottom) + top;
 
       size_t index = 3 * cont.points->count;
 
       cont.points->data[index + 0] = xpos;
       cont.points->data[index + 1] = ypos;
-      cont.points->data[index + 2] = 0.01;
+      cont.points->data[index + 2] = (right - left) / 200;
 
       glBindBuffer (GL_ARRAY_BUFFER, cont.buffer);
       glBufferSubData (GL_ARRAY_BUFFER,
@@ -337,6 +347,22 @@ main (void)
     glDeleteShader (fragment_shader);
   }
 
+  {
+    gluint programs[3] = { circle_program,
+                           primitive_program,
+                           texture_program };
+
+    for (size_t i = 0; i < 3; i++)
+      {
+        glUseProgram (programs[i]);
+        glUniformMatrix4fv (glGetUniformLocation (programs[i],
+                                                  "ortho"),
+                            1,
+                            GL_TRUE,
+                            ortho);
+      }
+  }
+
   gluint texture_array, texture_buffer;
   glCreateVertexArrays (1, &texture_array);
   glCreateBuffers (1, &texture_buffer);
@@ -347,10 +373,10 @@ main (void)
   glEnableVertexAttribArray (0);
 
   {
-    float quad[] = { -1, -1, 0, 0,
-                      1, -1, 1, 0,
-                     -1,  1, 0, 1,
-                      1,  1, 1, 1 };
+    float quad[] = { left, bottom, 0, 0,
+                     right, bottom, 1, 0,
+                     left, top, 0, 1,
+                     right, top, 1, 1 };
 
     glBindBuffer (GL_ARRAY_BUFFER, texture_buffer);
     glBufferData (GL_ARRAY_BUFFER,
