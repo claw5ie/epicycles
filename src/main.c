@@ -86,11 +86,11 @@ float const aspect_ratio = (float)SCREEN_WIDTH / SCREEN_HEIGHT;
 float const left = -4, right = 4;
 float const bottom = left / aspect_ratio, top = right / aspect_ratio;
 
-const float ortho[4 * 4] =
-  { 2.0 / (right - left), 0, 0, -(left + right) / (right - left),
-    0, 2.0 / (top - bottom), 0, -(bottom + top) / (top - bottom),
-    0, 0, 1, 0,
-    0, 0, 0, 1 };
+const float ortho[4 * 4]
+  = { 2.0 / (right - left), 0, 0, -(left + right) / (right - left),
+      0, 2.0 / (top - bottom), 0, -(bottom + top) / (top - bottom),
+      0, 0, 1, 0,
+      0, 0, 0, 1 };
 
 bool is_left_mouse_button_pressed = false;
 
@@ -111,8 +111,8 @@ mouse_cursor_pos_callback (GLFWwindow *win,
 {
   if (is_left_mouse_button_pressed)
     {
-      MouseCursorContext cursor =
-        ((Contexts *)glfwGetWindowUserPointer (win))[CURSOR_CONTEXT].cursor;
+      MouseCursorContext cursor
+        = ((Contexts *)glfwGetWindowUserPointer (win))[CURSOR_CONTEXT].cursor;
 
       size_t const count = cursor.points->count;
 
@@ -218,8 +218,8 @@ keyboard_callback (GLFWwindow *win,
     glfwSetWindowShouldClose (win, true);
   else if (key == GLFW_KEY_F && action == GLFW_PRESS)
     {
-      KeyContext key =
-        ((Contexts *)glfwGetWindowUserPointer (win))[KEY_CONTEXT].key;
+      KeyContext key
+        = ((Contexts *)glfwGetWindowUserPointer (win))[KEY_CONTEXT].key;
 
       size_t const count = key.points->count;
 
@@ -420,31 +420,31 @@ main (void)
   gluint circle_program, primitive_program, texture_program;
 
   {
-    gluint vertex_shader =
-      create_shader (GL_VERTEX_SHADER, "shaders/circle.vert");
-    gluint fragment_shader =
-      create_shader (GL_FRAGMENT_SHADER, "shaders/circle.frag");
+    gluint vertex_shader
+      = create_shader (GL_VERTEX_SHADER, "shaders/circle.vert");
+    gluint fragment_shader
+      = create_shader (GL_FRAGMENT_SHADER, "shaders/circle.frag");
     circle_program = create_program (vertex_shader, fragment_shader);
 
     glDeleteShader (vertex_shader);
     glDeleteShader (fragment_shader);
 
-    vertex_shader =
-      create_shader (GL_VERTEX_SHADER, "shaders/primitive.vert");
-    fragment_shader =
-      create_shader (GL_FRAGMENT_SHADER, "shaders/primitive.frag");
-    primitive_program =
-      create_program (vertex_shader, fragment_shader);
+    vertex_shader
+      = create_shader (GL_VERTEX_SHADER, "shaders/primitive.vert");
+    fragment_shader
+      = create_shader (GL_FRAGMENT_SHADER, "shaders/primitive.frag");
+    primitive_program
+      = create_program (vertex_shader, fragment_shader);
 
     glDeleteShader (vertex_shader);
     glDeleteShader (fragment_shader);
 
-    vertex_shader =
-      create_shader (GL_VERTEX_SHADER, "shaders/texture.vert");
-    fragment_shader =
-      create_shader (GL_FRAGMENT_SHADER, "shaders/texture.frag");
-    texture_program =
-      create_program (vertex_shader, fragment_shader);
+    vertex_shader
+      = create_shader (GL_VERTEX_SHADER, "shaders/texture.vert");
+    fragment_shader
+      = create_shader (GL_FRAGMENT_SHADER, "shaders/texture.frag");
+    texture_program
+      = create_program (vertex_shader, fragment_shader);
 
     glDeleteShader (vertex_shader);
     glDeleteShader (fragment_shader);
