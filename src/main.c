@@ -13,12 +13,14 @@
 #define CIRCLE_SAMPLES 64
 #define MAX_POINTS_COUNT 128
 
-#define FOURIER_DEGREE 2
+#define FOURIER_DEGREE 16
 
 #define SCREEN_WIDTH 800
 #define SCREEN_HEIGHT 600
 
-typedef struct MouseButtonContext MouseButtonContext;
+typedef struct MouseCursorContext MouseCursorContext;
+typedef struct KeyContext KeyContext;
+typedef union Contexts Contexts;
 typedef struct Arrayf Arrayf;
 
 struct Arrayf
@@ -56,10 +58,28 @@ get_size_of_arrayf (const Arrayf *arr)
   return arr->comps * arr->count * sizeof (float);
 }
 
-struct MouseButtonContext
+enum ContextType
+  {
+    CURSOR_CONTEXT = 0, KEY_CONTEXT = 1
+  };
+
+struct MouseCursorContext
 {
   gluint buffer;
   Arrayf *points;
+};
+
+struct KeyContext
+{
+  Arrayf *coeffs, *points;
+  float *curr, *start_time;
+  bool *is_fourier_series_ready;
+};
+
+union Contexts
+{
+  KeyContext key;
+  MouseCursorContext cursor;
 };
 
 float const aspect_ratio = (float)SCREEN_WIDTH / SCREEN_HEIGHT;
@@ -89,12 +109,12 @@ void
 mouse_cursor_pos_callback (GLFWwindow *win,
                            double xpos, double ypos)
 {
-  MouseButtonContext ctx =
-    *(MouseButtonContext *)glfwGetWindowUserPointer (win);
-
   if (is_left_mouse_button_pressed)
     {
-      size_t const count = ctx.points->count;
+      MouseCursorContext cursor =
+        ((Contexts *)glfwGetWindowUserPointer (win))[CURSOR_CONTEXT].cursor;
+
+      size_t const count = cursor.points->count;
 
       if (count >= MAX_POINTS_COUNT)
         return;
@@ -104,27 +124,28 @@ mouse_cursor_pos_callback (GLFWwindow *win,
 
       if (count > 0)
         {
-          float *prev_point = ctx.points->data + 3 * (count - 1);
+          float *prev_point = cursor.points->data
+                              + 3 * (count - 1);
 
           if (pow (xpos - prev_point[0], 2)
-              + pow (ypos - prev_point[1], 2)
-              < (right - left) / 64)
+              + pow (ypos - prev_point[1], 2) < (right - left) / 64)
             return;
         }
 
-      float *point = ctx.points->data + 3 * count;
+      float *point = cursor.points->data + 3 * count;
 
       point[0] = xpos;
       point[1] = ypos;
       point[2] = (right - left) / 200;
 
-      glBindBuffer (GL_ARRAY_BUFFER, ctx.buffer);
+      glBindBuffer (GL_ARRAY_BUFFER, cursor.buffer);
       glBufferSubData (GL_ARRAY_BUFFER,
-                       (point - ctx.points->data) * sizeof (float),
+                       (point - cursor.points->data)
+                         * sizeof (float),
                        3 * sizeof (float),
                        point);
 
-      ++ctx.points->count;
+      ++cursor.points->count;
     }
 }
 
@@ -183,6 +204,70 @@ compute_fourier_series (float *dst, float *z, size_t count,
       size_t ind = 2 * (i + degree);
       dst[ind + 0] = coeff.x;
       dst[ind + 1] = coeff.y;
+    }
+}
+
+void
+keyboard_callback (GLFWwindow *win,
+                   int key, int scancode, int action, int mods)
+{
+  (void)scancode;
+  (void)mods;
+
+  if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
+    glfwSetWindowShouldClose (win, true);
+  else if (key == GLFW_KEY_F && action == GLFW_PRESS)
+    {
+      KeyContext key =
+        ((Contexts *)glfwGetWindowUserPointer (win))[KEY_CONTEXT].key;
+
+      size_t const count = key.points->count;
+
+      if (count < 3)
+        return;
+
+      bool should_incr = false;
+
+      if (count % 2 == 0)
+        {
+          float *const points = key.points->data;
+
+          points[count + 0] = (points[0] + points[count - 2]) / 2;
+          points[count + 1] = (points[1] + points[count - 1]) / 2;
+
+          should_incr = true;
+        }
+
+      compute_fourier_series (key.coeffs->data,
+                              key.points->data,
+                              count + should_incr,
+                              FOURIER_DEGREE);
+
+      {
+        size_t ind = 2 * FOURIER_DEGREE;
+        float x = key.coeffs->data[ind + 0];
+        float y = key.coeffs->data[ind + 1];
+
+        memmove (key.coeffs->data + 2,
+                 key.coeffs->data,
+                 FOURIER_DEGREE * 2 * sizeof (float));
+
+        key.coeffs->data[0] = x;
+        key.coeffs->data[1] = y;
+      }
+
+      key.curr[0] = 0;
+      key.curr[1] = 0;
+
+      for (size_t i = 0; i < key.coeffs->count; i++)
+        {
+          key.curr[0] += key.coeffs->data[2 * i + 0];
+          key.curr[1] += key.coeffs->data[2 * i + 1];
+        }
+
+      *key.start_time = glfwGetTime ();
+
+      *key.is_fourier_series_ready = true;
     }
 }
 
@@ -269,6 +354,7 @@ main (void)
 
   glfwSetMouseButtonCallback (window, mouse_button_callback);
   glfwSetCursorPosCallback (window, mouse_cursor_pos_callback);
+  glfwSetKeyCallback (window, keyboard_callback);
 
   gluint circle_samples_buffer = setup_circle_samples ();
 
@@ -290,11 +376,6 @@ main (void)
   --points.capacity;
   coeffs.count = coeffs.capacity;
   circles.count = circles.capacity;
-
-  MouseButtonContext mouse_context = { points_buffer,
-                                       &points };
-
-  glfwSetWindowUserPointer (window, &mouse_context);
 
   glBindBuffer (GL_ARRAY_BUFFER, points_buffer);
   glBufferData (GL_ARRAY_BUFFER,
@@ -455,7 +536,7 @@ main (void)
       exit (EXIT_FAILURE);
     }
 
-  bool execute_once = true;
+  bool is_fourier_series_ready = false;
 
   float trace_line[4], *prev = trace_line, *curr = prev + 2;
 
@@ -469,11 +550,25 @@ main (void)
 
   float start_time = 0;
 
+  union Contexts contexts[2];
+
+  contexts[CURSOR_CONTEXT].cursor
+    = (MouseCursorContext){ points_buffer,
+                            &points };
+  contexts[KEY_CONTEXT].key
+    = (KeyContext){ &coeffs,
+                    &points,
+                    curr,
+                    &start_time,
+                    &is_fourier_series_ready };
+
+  glfwSetWindowUserPointer (window, contexts);
+
   while (!glfwWindowShouldClose (window))
     {
       float const t = glfwGetTime () - start_time;
 
-      if (!execute_once)
+      if (is_fourier_series_ready)
         {
           circles.data[0] = coeffs.data[0];
           circles.data[1] = coeffs.data[1];
@@ -535,7 +630,7 @@ main (void)
       glBindVertexArray (connecting_points_array);
       glDrawArrays (GL_LINE_LOOP, 0, points.count);
 
-      if (!execute_once)
+      if (is_fourier_series_ready)
         {
           glUseProgram (circle_program);
           glBindVertexArray (circle_array);
@@ -556,50 +651,6 @@ main (void)
 
           glBindVertexArray (trace_array);
           glDrawArrays (GL_LINES, 0, 2);
-        }
-
-      if (points.count == 9 && execute_once)
-        {
-          char should_incr = 0;
-
-          if (points.count % 2 == 0)
-            {
-              points.data[points.count + 0] =
-                (points.data[0] + points.data[points.count - 2]) / 2;
-              points.data[points.count + 1] =
-                (points.data[1] + points.data[points.count - 1]) / 2;
-              should_incr = 1;
-            }
-
-          compute_fourier_series (coeffs.data,
-                                  points.data,
-                                  points.count + should_incr,
-                                  FOURIER_DEGREE);
-
-          {
-            size_t ind = 2 * FOURIER_DEGREE;
-            float x = coeffs.data[ind + 0], y = coeffs.data[ind + 1];
-
-            memmove (coeffs.data + 2,
-                     coeffs.data,
-                     FOURIER_DEGREE * 2 * sizeof (float));
-
-            coeffs.data[0] = x;
-            coeffs.data[1] = y;
-          }
-
-          curr[0] = 0;
-          curr[1] = 0;
-
-          for (size_t i = 0; i < coeffs.count; i++)
-            {
-              curr[0] += coeffs.data[2 * i + 0];
-              curr[1] += coeffs.data[2 * i + 1];
-            }
-
-          start_time = glfwGetTime ();
-
-          execute_once = false;
         }
 
       glfwSwapBuffers (window);
