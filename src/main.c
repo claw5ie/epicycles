@@ -18,18 +18,13 @@
 #define SCREEN_WIDTH 800
 #define SCREEN_HEIGHT 600
 
-typedef struct MouseCursorContext MouseCursorContext;
-typedef struct KeyContext KeyContext;
-typedef union Contexts Contexts;
-typedef struct Arrayf Arrayf;
-
-struct Arrayf
+typedef struct
 {
   float *data;
   size_t comps;
   size_t count;
   size_t capacity;
-};
+} Arrayf;
 
 Arrayf
 create_arrayf (size_t comps, size_t capacity)
@@ -58,30 +53,6 @@ get_size_of_arrayf (const Arrayf *arr)
   return arr->comps * arr->count * sizeof (float);
 }
 
-enum ContextType
-  {
-    CURSOR_CONTEXT = 0, KEY_CONTEXT = 1
-  };
-
-struct MouseCursorContext
-{
-  gluint buffer;
-  Arrayf *points;
-};
-
-struct KeyContext
-{
-  Arrayf *coeffs, *points;
-  float *curr, *start_time;
-  bool *is_fourier_series_ready;
-};
-
-union Contexts
-{
-  KeyContext key;
-  MouseCursorContext cursor;
-};
-
 float const aspect_ratio = (float)SCREEN_WIDTH / SCREEN_HEIGHT;
 float const left = -4, right = 4;
 float const bottom = left / aspect_ratio, top = right / aspect_ratio;
@@ -93,6 +64,14 @@ const float ortho[4 * 4]
       0, 0, 0, 1 };
 
 bool is_left_mouse_button_pressed = false;
+
+struct
+{
+  gluint points_buffer;
+  Arrayf points, coeffs;
+  float line_trace[4], start_time;
+  bool is_fourier_series_ready;
+} context;
 
 void
 mouse_button_callback (GLFWwindow *win,
@@ -109,12 +88,11 @@ void
 mouse_cursor_pos_callback (GLFWwindow *win,
                            double xpos, double ypos)
 {
+  (void)win;
+
   if (is_left_mouse_button_pressed)
     {
-      MouseCursorContext cursor
-        = ((Contexts *)glfwGetWindowUserPointer (win))[CURSOR_CONTEXT].cursor;
-
-      size_t const count = cursor.points->count;
+      size_t const count = context.points.count;
 
       if (count >= MAX_POINTS_COUNT)
         return;
@@ -124,7 +102,7 @@ mouse_cursor_pos_callback (GLFWwindow *win,
 
       if (count > 0)
         {
-          float *prev_point = cursor.points->data
+          float *prev_point = context.points.data
                               + 3 * (count - 1);
 
           if (pow (xpos - prev_point[0], 2)
@@ -132,20 +110,20 @@ mouse_cursor_pos_callback (GLFWwindow *win,
             return;
         }
 
-      float *point = cursor.points->data + 3 * count;
+      float *point = context.points.data + 3 * count;
 
       point[0] = xpos;
       point[1] = ypos;
       point[2] = (right - left) / 200;
 
-      glBindBuffer (GL_ARRAY_BUFFER, cursor.buffer);
+      glBindBuffer (GL_ARRAY_BUFFER, context.points_buffer);
       glBufferSubData (GL_ARRAY_BUFFER,
-                       (point - cursor.points->data)
+                       (point - context.points.data)
                          * sizeof (float),
                        3 * sizeof (float),
                        point);
 
-      ++cursor.points->count;
+      ++context.points.count;
     }
 }
 
@@ -218,10 +196,7 @@ keyboard_callback (GLFWwindow *win,
     glfwSetWindowShouldClose (win, true);
   else if (key == GLFW_KEY_F && action == GLFW_PRESS)
     {
-      KeyContext key
-        = ((Contexts *)glfwGetWindowUserPointer (win))[KEY_CONTEXT].key;
-
-      size_t const count = key.points->count;
+      size_t const count = context.points.count;
 
       if (count < 3)
         return;
@@ -230,7 +205,7 @@ keyboard_callback (GLFWwindow *win,
 
       if (count % 2 == 0)
         {
-          float *const points = key.points->data;
+          float *const points = context.points.data;
 
           points[count + 0] = (points[0] + points[count - 2]) / 2;
           points[count + 1] = (points[1] + points[count - 1]) / 2;
@@ -238,36 +213,35 @@ keyboard_callback (GLFWwindow *win,
           should_incr = true;
         }
 
-      compute_fourier_series (key.coeffs->data,
-                              key.points->data,
+      compute_fourier_series (context.coeffs.data,
+                              context.points.data,
                               count + should_incr,
                               FOURIER_DEGREE);
 
       {
         size_t ind = 2 * FOURIER_DEGREE;
-        float x = key.coeffs->data[ind + 0];
-        float y = key.coeffs->data[ind + 1];
+        float x = context.coeffs.data[ind + 0];
+        float y = context.coeffs.data[ind + 1];
 
-        memmove (key.coeffs->data + 2,
-                 key.coeffs->data,
+        memmove (context.coeffs.data + 2,
+                 context.coeffs.data,
                  FOURIER_DEGREE * 2 * sizeof (float));
 
-        key.coeffs->data[0] = x;
-        key.coeffs->data[1] = y;
+        context.coeffs.data[0] = x;
+        context.coeffs.data[1] = y;
       }
 
-      key.curr[0] = 0;
-      key.curr[1] = 0;
+      context.line_trace[2] = 0;
+      context.line_trace[3] = 0;
 
-      for (size_t i = 0; i < key.coeffs->count; i++)
+      for (size_t i = 0; i < context.coeffs.count; i++)
         {
-          key.curr[0] += key.coeffs->data[2 * i + 0];
-          key.curr[1] += key.coeffs->data[2 * i + 1];
+          context.line_trace[2] += context.coeffs.data[2 * i + 0];
+          context.line_trace[3] += context.coeffs.data[2 * i + 1];
         }
 
-      *key.start_time = glfwGetTime ();
-
-      *key.is_fourier_series_ready = true;
+      context.start_time = glfwGetTime ();
+      context.is_fourier_series_ready = true;
     }
 }
 
@@ -358,28 +332,28 @@ main (void)
 
   gluint circle_samples_buffer = setup_circle_samples ();
 
-  gluint points_array, points_buffer;
+  gluint points_array;
   create_and_attach_buffer (circle_samples_buffer,
                             &points_array,
-                            &points_buffer);
+                            &context.points_buffer);
 
   gluint circle_array, circle_buffer;
   create_and_attach_buffer (circle_samples_buffer,
                             &circle_array,
                             &circle_buffer);
 
-  Arrayf points = create_arrayf (3, MAX_POINTS_COUNT + 1);
-  Arrayf coeffs = create_arrayf (2, 2 * FOURIER_DEGREE + 1);
+  context.points = create_arrayf (3, MAX_POINTS_COUNT + 1);
+  context.coeffs = create_arrayf (2, 2 * FOURIER_DEGREE + 1);
   Arrayf circles = create_arrayf (3, 2 * FOURIER_DEGREE + 1);
 
   // Remove last point for fourier series.
-  --points.capacity;
-  coeffs.count = coeffs.capacity;
+  --context.points.capacity;
+  context.coeffs.count = context.coeffs.capacity;
   circles.count = circles.capacity;
 
-  glBindBuffer (GL_ARRAY_BUFFER, points_buffer);
+  glBindBuffer (GL_ARRAY_BUFFER, context.points_buffer);
   glBufferData (GL_ARRAY_BUFFER,
-                get_total_size_of_arrayf (&points),
+                get_total_size_of_arrayf (&context.points),
                 NULL,
                 GL_DYNAMIC_DRAW);
 
@@ -520,7 +494,7 @@ main (void)
   glCreateVertexArrays (1, &connecting_points_array);
 
   glBindVertexArray (connecting_points_array);
-  glBindBuffer (GL_ARRAY_BUFFER, points_buffer);
+  glBindBuffer (GL_ARRAY_BUFFER, context.points_buffer);
   glVertexAttribPointer (0,
                          2,
                          GL_FLOAT,
@@ -536,9 +510,7 @@ main (void)
       exit (EXIT_FAILURE);
     }
 
-  bool is_fourier_series_ready = false;
-
-  float trace_line[4], *prev = trace_line, *curr = prev + 2;
+  context.is_fourier_series_ready = false;
 
   glEnable (GL_BLEND);
   glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -548,41 +520,25 @@ main (void)
   glClear (GL_COLOR_BUFFER_BIT);
   glClearColor (1.0, 0.0, 0.0, 1.0);
 
-  float start_time = 0;
-
-  union Contexts contexts[2];
-
-  contexts[CURSOR_CONTEXT].cursor
-    = (MouseCursorContext){ points_buffer,
-                            &points };
-  contexts[KEY_CONTEXT].key
-    = (KeyContext){ &coeffs,
-                    &points,
-                    curr,
-                    &start_time,
-                    &is_fourier_series_ready };
-
-  glfwSetWindowUserPointer (window, contexts);
-
   while (!glfwWindowShouldClose (window))
     {
-      float const t = glfwGetTime () - start_time;
-
-      if (is_fourier_series_ready)
+      if (context.is_fourier_series_ready)
         {
-          circles.data[0] = coeffs.data[0];
-          circles.data[1] = coeffs.data[1];
+          float const t = glfwGetTime () - context.start_time;
+
+          circles.data[0] = context.coeffs.data[0];
+          circles.data[1] = context.coeffs.data[1];
 
           int freq = -FOURIER_DEGREE;
 
           size_t i = 1;
-          while (i < coeffs.count)
+          while (i < context.coeffs.count)
             {
               freq += (freq == 0);
 
               float c = cos (freq * t), s = sin (freq * t);
-              float x = coeffs.data[2 * i + 0];
-              float y = coeffs.data[2 * i + 1];
+              float x = context.coeffs.data[2 * i + 0];
+              float y = context.coeffs.data[2 * i + 1];
 
               size_t const ind = 3 * i;
               circles.data[ind - 1] = sqrt (x * x + y * y);
@@ -595,13 +551,13 @@ main (void)
               ++i;
             }
 
-          prev[0] = curr[0];
-          prev[1] = curr[1];
+          context.line_trace[0] = context.line_trace[2];
+          context.line_trace[1] = context.line_trace[3];
 
           --i;
 
-          curr[0] = circles.data[3 * i + 0];
-          curr[1] = circles.data[3 * i + 1];
+          context.line_trace[2] = circles.data[3 * i + 0];
+          context.line_trace[3] = circles.data[3 * i + 1];
 
           glBindBuffer (GL_ARRAY_BUFFER, circle_buffer);
           glBufferSubData (GL_ARRAY_BUFFER,
@@ -612,8 +568,8 @@ main (void)
           glBindBuffer (GL_ARRAY_BUFFER, trace_buffer);
           glBufferSubData (GL_ARRAY_BUFFER,
                            0,
-                           sizeof (trace_line),
-                           trace_line);
+                           sizeof (context.line_trace),
+                           context.line_trace);
         }
 
       glBindFramebuffer (GL_FRAMEBUFFER, 0);
@@ -624,13 +580,13 @@ main (void)
       glDrawArraysInstanced (GL_TRIANGLE_FAN,
                              0,
                              CIRCLE_SAMPLES + 1,
-                             points.count);
+                             context.points.count);
 
       glUseProgram (primitive_program);
       glBindVertexArray (connecting_points_array);
-      glDrawArrays (GL_LINE_LOOP, 0, points.count);
+      glDrawArrays (GL_LINE_LOOP, 0, context.points.count);
 
-      if (is_fourier_series_ready)
+      if (context.is_fourier_series_ready)
         {
           glUseProgram (circle_program);
           glBindVertexArray (circle_array);
@@ -659,8 +615,8 @@ main (void)
     }
 
   free (circles.data);
-  free (coeffs.data);
-  free (points.data);
+  free (context.coeffs.data);
+  free (context.points.data);
 
   glfwTerminate ();
 
